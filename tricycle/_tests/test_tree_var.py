@@ -142,42 +142,49 @@ def test_treevar_outside_run() -> None:
         operation()  # type: ignore
     
     diff_context_regex = r".*was created in a different Context"
-    # Resetting the context value in sync context to the token set in async context should raise
+    # Resetting the context var in sync context to the token set in async context should raise
     with pytest.raises(ValueError, match=diff_context_regex):
         tv1.reset(trio.run(run_sync, tv1.set, 10))
 
 
-    tv1 = TreeVar("tv1", default=10)
+    tv2 = TreeVar("tv2", default=10)
     def mix_async_and_sync():
-        token_async = None
-        token_sync = tv1.set(15)
+        token_sync = tv2.set(15)
+        assert tv2.get() == 15
         
+        token_async = None
         async def set_and_get():
             nonlocal token_async
-            assert tv1.get() == 15
-            token_async = tv1.set(20)
-            assert tv1.get() == 20
-            with pytest.raises(ValueError, match=diff_context_regex):
-                tv1.reset(token_sync)
-        
-        assert tv1.get() == 15
-        trio.run(set_and_get)
-        # Assert that the value is not affected
-        # by the trio's run
-        assert tv1.get() == 15
+            # Assert that the new trio run picks up the 
+            # most-recently set value in the sync context
+            assert tv2.get() == 15
 
-        tv1.set(20)
-        async def another_set_and_get():
-            # Assert that the new trio run
-            # picks up the most-recently set value
-            # in the sync context
-            assert tv1.get() == 20
-        trio.run(another_set_and_get)
+            token_async = tv2.set(20)
+            # Assert that setting in async context works
+            assert tv2.get() == 20
+
+            # Assert that resetting the context var in async context
+            # to the token set in sync context raises
+            with pytest.raises(ValueError, match=diff_context_regex):
+                tv2.reset(token_sync)
+    
+            # Assert that resetting the context var in async context
+            # to the token set in the async context works
+            tv2.reset(token_async)
+            assert tv2.get() == 15
+
+            # Set it to another value again and make sure sync context
+            # is not afffected
+            tv2.set(20)
+        
+        trio.run(set_and_get)
+        # Assert that the value is not affected by the trio's run
+        assert tv2.get() == 15
 
         # Assert that resetting the token in the same context works
-        tv1.reset(token_sync)
-        assert tv1.get() == 10
+        tv2.reset(token_sync)
+        assert tv2.get() == 10
         with pytest.raises(ValueError, match=diff_context_regex):
-            tv1.reset(token_async)
+            tv2.reset(token_async)
 
     mix_async_and_sync()
