@@ -163,17 +163,19 @@ class TreeVar(Generic[T]):
             # context.run() might fail.
             pass
         elif for_task.context is current_task.context and (
-            # and if the task that we're fetching for is not the dummy synchronous
-            # context task, this is a real trio task
-            # and we're already running inside the context of the task.
-            # So we can just set the cvar directly here. 
+            # And if the task that we're fetching for is not the dummy 
+            # synchronous context task, this means that this task is a 
+            # real trio task
+            # In this case, we're already running inside the context 
+            # of the task, so we can just directly set the cvar here. 
             for_task is not self._sync_context_task
         ):
             self._cvar.set(new_state)
         else:
-            # In all other cases, including
-            # if the task that we're fetching for is the synchronous context task, 
+            # If the for_task context and current_task context is different
+            # or if the for_tasl is the dummy synchronous context task, 
             # set the contextvar inside the context of the for_task.
+            # because we're currently not running inside the context of for_task
             for_task.context.run(self._cvar.set, new_state)
         return new_state
 
@@ -188,6 +190,8 @@ class TreeVar(Generic[T]):
             return trio.lowlevel.current_task()
         except RuntimeError as e:
             if str(e) == "must be called from async context":
+                # return the dummy sync context task if we're
+                # not in an async context
                 return self._sync_context_task
             raise e
 
