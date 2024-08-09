@@ -94,7 +94,8 @@ class TreeVar(Generic[T]):
     def __init__(self, name: str, *, default: T = MISSING):
         self._cvar = contextvars.ContextVar(name)
         self._default = default
-        # Dummy task that that simulates 'sync' loop when we're in a synchronous context
+        # Dummy trio task that that simulates the 'current task'
+        # whenever we're running in a synchronous context
         self._sync_context_task = trio.lowlevel.Task._create(
             coro=None,
             parent_nursery=None,
@@ -162,12 +163,17 @@ class TreeVar(Generic[T]):
             # context.run() might fail.
             pass
         elif for_task.context is current_task.context and (
-            # If the task that we're fetching from is the sync context task 
-            # set the contextvar inside the sync context
+            # and if the task that we're fetching for is not the dummy synchronous
+            # context task, this is a real trio task
+            # and we're already running inside the context of the task.
+            # So we can just set the cvar directly here. 
             for_task is not self._sync_context_task
         ):
             self._cvar.set(new_state)
         else:
+            # In all other cases, including
+            # if the task that we're fetching for is the synchronous context task, 
+            # set the contextvar inside the context of the for_task.
             for_task.context.run(self._cvar.set, new_state)
         return new_state
 
