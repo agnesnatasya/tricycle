@@ -148,12 +148,19 @@ def test_treevar_outside_run() -> None:
 
 
     tv2 = TreeVar("tv2", default=10)
+    # Assert that being also works in sync context
+    with tv2.being(30):
+        assert tv2.get() == 30
+    assert tv2.get() == 10
+
     def mix_async_and_sync():
         token_sync = tv2.set(15)
         assert tv2.get() == 15
         
+        trio_task = None
         token_async = None
         async def set_and_get():
+            nonlocal trio_task
             nonlocal token_async
             # Assert that the new trio run picks up the 
             # most-recently set value in the sync context
@@ -176,8 +183,13 @@ def test_treevar_outside_run() -> None:
             # Set it to another value again and make sure sync context
             # is not afffected
             tv2.set(20)
+            trio_task = trio.lowlevel.current_task()
         
         trio.run(set_and_get)
+        
+        # Assert that getting the last value set inside the trio task works
+        assert tv2.get_in(trio_task) == 20
+        
         # Assert that the value is not affected by the trio's run
         assert tv2.get() == 15
 
