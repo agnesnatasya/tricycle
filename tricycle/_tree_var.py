@@ -4,6 +4,7 @@ import attrs
 import contextvars
 import trio
 import weakref
+import threading
 from contextlib import contextmanager
 from typing import (
     TypeVar,
@@ -19,6 +20,23 @@ from typing import (
 T = TypeVar("T")
 U = TypeVar("U")
 
+class SyncContextTask():
+    def __init__(self, is_trio_thread: bool) -> None:
+        self.is_trio_thread = is_trio_thread
+        # Dummy properties expected for a dummy task
+        self.parent_nursery=None
+        self.eventual_parent_nursery = None
+        self.child_nurseries: list[trio.Nursery]= []
+        self.context= contextvars.copy_context()
+    
+    @property
+    def name(self) -> str:
+        return self.__repr__()
+TaskLike = Union[SyncContextTask, trio.lowlevel.Task]
+
+# Use threading.local instead of contextvars because
+# contextvars behave differently for trio-created threads and kernel threads
+data_per_thread = threading.local()
 
 __all__ = ["TreeVar", "TreeVarToken"]
 
@@ -33,7 +51,7 @@ class _TreeVarState(Generic[T]):
     # Weakref to the task for which this state is valid; used to notice
     # when a TreeVar has been inherited across start_soon() and recompute
     # its value via tree-based inheritance.
-    task_ref: weakref.ref[trio.lowlevel.Task]
+    task_ref: weakref.ref[TaskLike]
 
     # Value accessed by TreeVar.get() and TreeVar.set() within that task.
     value_for_task: T = MISSING
@@ -63,7 +81,6 @@ class TreeVarToken(Generic[T]):
     old_value: T
     _context: contextvars.Context = attrs.field(repr=False)
 
-
 class TreeVar(Generic[T]):
     """A "tree variable": like a context variable except that its value
     in a new task is inherited from the new task's parent nursery rather
@@ -85,24 +102,14 @@ class TreeVar(Generic[T]):
 
     """
 
-    __slots__ = ("_cvar", "_default", "_sync_context_task")
+    __slots__ = ("_cvar", "_default")
 
     _cvar: contextvars.ContextVar[_TreeVarState[T]]
     _default: T
-    _sync_context_task: trio.lowlevel.Task
 
     def __init__(self, name: str, *, default: T = MISSING):
         self._cvar = contextvars.ContextVar(name)
         self._default = default
-        # Dummy trio task that that simulates the 'current task'
-        # whenever we're running in a synchronous context
-        self._sync_context_task = trio.lowlevel.Task._create(
-            coro=None,
-            parent_nursery=None,
-            runner=None,
-            name="sync context",
-            context=contextvars.copy_context(),
-        )
 
     def __repr__(self) -> str:
         dflt = ""
@@ -118,8 +125,8 @@ class TreeVar(Generic[T]):
 
     def _fetch(
         self,
-        for_task: trio.lowlevel.Task,
-        current_task: Optional[trio.lowlevel.Task],
+        for_task: Optional[TaskLike],
+        current_task: Optional[TaskLike],
     ) -> _TreeVarState[T]:
         """Return the _TreeVarState associated with *for_task*, inheriting
         it from a parent nursery if necessary.
@@ -138,18 +145,26 @@ class TreeVar(Generic[T]):
         nursery = for_task.eventual_parent_nursery or for_task.parent_nursery
         inherited_value: T
         if nursery is None:
-            #  root "init" task doesn't have a parent nursery
-            try:
-                # Try to get  the latest state from the sync context 
-                sync_context_state = self._sync_context_task.context[self._cvar]
-                # There's no notion of 'value_for_children' in sync context,
-                # whatever value is set for the sync task is the value
-                # that needs to be inherited to the async context. 
-                inherited_value = sync_context_state.value_for_task
-            except KeyError:
-                # This TreeVar hasn't yet been used in the sync context.
-                # Initialize it to MISSING.
-                inherited_value = MISSING
+            if isinstance(for_task, SyncContextTask):
+                if for_task.is_trio_thread:
+                    parent_trio_task_state = trio.from_thread.run_sync(lambda: self._fetch(self.get_current_task(), self.get_current_task()))
+                    inherited_value = parent_trio_task_state.value_for_task
+                else:
+                    inherited_value = MISSING
+            else:
+                # root trio task doesn't have a parent nursery
+                # root "init" task doesn't have a parent nursery
+                try:
+                    # Try to get  the latest state from the sync context
+                    sync_context_state = data_per_thread.sync_context_task.context[self._cvar]
+                    # There's no notion of 'value_for_children' in sync context,
+                    # whatever value is set for the sync task is the value
+                    # that needs to be inherited to the async context. 
+                    inherited_value = sync_context_state.value_for_task
+                except (KeyError, LookupError):
+                    # This TreeVar hasn't yet been used in the sync context.
+                    # Initialize it to MISSING.
+                    inherited_value = MISSING
         else:
             parent_state = self._fetch(nursery.parent_task, current_task)
             inherited_value = parent_state.value_for_children.get(
@@ -162,38 +177,66 @@ class TreeVar(Generic[T]):
             # values in case we're in a different thread where
             # context.run() might fail.
             pass
-        elif for_task.context is current_task.context and (
-            # And if the task that we're fetching for is not the dummy 
-            # synchronous context task, this means that this task is a 
-            # real trio task
-            # In this case, we're already running inside the context 
-            # of the task, so we can just directly set the cvar here. 
-            for_task is not self._sync_context_task
-        ):
-            self._cvar.set(new_state)
+        elif isinstance(for_task, SyncContextTask):
+            for_task.context.run(self._cvar.set, new_state) # NOCOMMIT: double check what oremanj said about cvar.set()
         else:
-            # If the for_task context and current_task context is different
-            # or if the for_tasl is the dummy synchronous context task, 
-            # set the contextvar inside the context of the for_task.
-            # because we're currently not running inside the context of for_task
-            for_task.context.run(self._cvar.set, new_state)
+            if for_task.context is current_task.context:
+                self._cvar.set(new_state)
+            else:
+                for_task.context.run(self._cvar.set, new_state)
         return new_state
+
+    def get_current_sync_context_task(self) -> SyncContextTask:
+        non_trio_thread_message = "this thread wasn't created by Trio, pass kwarg trio_token=..."
+        try:
+            trio.from_thread.run_sync(lambda: None)
+        except RuntimeError as exc:
+            if str(exc) == non_trio_thread_message:
+                # We're in a non-trio thread
+                try:
+                    sync_context_task = data_per_thread.sync_context_task
+                except AttributeError:
+                    data_per_thread.sync_context_task = SyncContextTask(is_trio_thread=False)
+                    sync_context_task = data_per_thread.sync_context_task
+            else:
+                raise exc
+        else:
+            try:
+                sync_context_task = data_per_thread.sync_context_task
+            except AttributeError:
+                    data_per_thread.sync_context_task = SyncContextTask(is_trio_thread=True)
+                    sync_context_task = data_per_thread.sync_context_task        
+        return sync_context_task
+
+    def get_current_task(self) -> TaskLike | None:
+        sync_context_error_message = "must be called from async context"
+        try:
+            trio.current_time()
+        except RuntimeError as e:
+            # If this fails, we're in a fully sync context
+            if str(e) == sync_context_error_message:
+                return self.get_current_sync_context_task()
+            raise e
+        else:
+            try:
+                current_task = trio.lowlevel.current_task()
+            except RuntimeError as e:
+                # If trio.current_time works but current_task fails, 
+                # there is an active run but no active task.
+                # This state is observable primarily in instruments, 
+                # end-of-run async generator finalizers, and some abort_fn callbacks.
+                if str(e) == sync_context_error_message:
+                    return trio.lowlevel.current_root_task()
+                raise e
+            else:
+                # If both works, we're in a normal async context
+                return current_task
 
     @overload
     def get(self) -> T: ...
 
     @overload
     def get(self, default: U) -> Union[T, U]: ...
-
-    def get_current_task(self):
-        try:
-            return trio.lowlevel.current_task()
-        except RuntimeError as e:
-            if str(e) == "must be called from async context":
-                # return the dummy sync context task if we're
-                # not in an async context
-                return self._sync_context_task
-            raise e
 
     def get(self, default: U = MISSING) -> Union[T, U]:
         this_task = self.get_current_task()
@@ -234,20 +277,20 @@ class TreeVar(Generic[T]):
             self.reset(token)
 
     @overload
-    def get_in(self, task_or_nursery: Union[trio.lowlevel.Task, trio.Nursery]) -> T: ...
+    def get_in(self, task_or_nursery: Union[TaskLike, trio.Nursery]) -> T: ...
 
     @overload
     def get_in(
-        self, task_or_nursery: Union[trio.lowlevel.Task, trio.Nursery], default: U
+        self, task_or_nursery: Union[TaskLike, trio.Nursery], default: U
     ) -> Union[T, U]: ...
 
     def get_in(
         self,
-        task_or_nursery: Union[trio.lowlevel.Task, trio.Nursery],
+        task_or_nursery: Union[TaskLike, trio.Nursery],
         default: U = MISSING,
     ) -> Union[T, U]:
         """Gets the value of this `TreeVar` in the given
-        `~trio.lowlevel.Task` or `~trio.Nursery`.
+        `~TaskLike` or `~trio.Nursery`.
 
         The value in a task is the value that would be returned by a
         call to :meth:`~contextvars.ContextVar.get` in that task. The
@@ -256,6 +299,7 @@ class TreeVar(Generic[T]):
         child task started in that nursery. The *default* argument has
         the same semantics as it does for :meth:`~contextvars.ContextVar.get`.
         """
+        task: TaskLike
         if isinstance(task_or_nursery, trio.Nursery):
             task = task_or_nursery.parent_task
         else:
