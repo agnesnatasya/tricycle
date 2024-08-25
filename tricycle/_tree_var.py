@@ -147,9 +147,12 @@ class TreeVar(Generic[T]):
         if nursery is None:
             if isinstance(for_task, SyncContextTask):
                 if for_task.is_trio_thread:
-                    parent_trio_task_state = trio.from_thread.run_sync(lambda: self._fetch(self.get_current_task(), self.get_current_task()))
-                    inherited_value = parent_trio_task_state.value_for_task
+                    # If it's a trio thread, we want to inherit the
+                    # value from the task that started the thread
+                    inherited_value = trio.from_thread.run_sync(self.get)
                 else:
+                    # If it's a kernel thread, there's no inherited value
+                    # because a thread always have an empty context object.
                     inherited_value = MISSING
             else:
                 # root trio task doesn't have a parent nursery

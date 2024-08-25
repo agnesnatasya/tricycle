@@ -5,6 +5,7 @@ from tricycle._tree_var import TreeVar
 import time
 
 from threading import Thread, local
+import random
 # CASE 1: Multiple sync threads that run trio inside
 cv_1 = TreeVar("cv_1")
 
@@ -24,9 +25,8 @@ def thread_task(user):
 Thread(target=thread_task, args=("koby",)).start()
 Thread(target=thread_task, args=("world",)).start()
 
-# CASE 2: Multiple threads in single trio run 
+CASE 2: Multiple threads in single trio run 
 cv_2 = TreeVar("cv_2")
-import random
 value_set_initially = 20
 async def main():
     def thread_task(value_for_nursery):
@@ -133,11 +133,11 @@ Thread(target=thread_task, args=("koby",)).start()
 Thread(target=thread_task, args=("world",)).start()
 
 
-# CASE 5: thread -> trio thread -> thread
+CASE 5: thread -> trio thread -> thread
 cv_5 = TreeVar("cv_5")
 def thread_task(arg):
     def trio_thread_task(value_for_thread):
-        assert cv_3.get() == value_for_thread
+        assert cv_5.get() == value_for_thread
 
         def thread_task_inside_trio():
             try:
@@ -151,11 +151,42 @@ def thread_task(arg):
         Thread(target=thread_task_inside_trio).start()
 
     value_for_thread = random.randint(1, 10)
-    cv_3.set(value_for_thread)
+    cv_5.set(value_for_thread)
     async def main():
-        # assert cv_3.get() == value_for_thread
+        assert cv_5.get() == value_for_thread
         await trio.to_thread.run_sync(trio_thread_task, value_for_thread)
     trio.run(main)
 
 Thread(target=thread_task, args=(1,)).start()
 Thread(target=thread_task, args=(2,)).start()
+
+# CASE 6: nurseyr with multiple threads
+cv_6 = TreeVar("cv_6")
+
+def thread_task():
+    def trio_thread_task(value_for_thread):
+        assert cv_6.get() == value_for_thread
+        pass
+        def thread_task_inside_trio():
+            try:
+                cv_6.get()
+            except LookupError:
+                pass
+            else:
+                raise
+
+
+    async def wait_for_a_thread():
+        assert cv_6.get() == value_for_thread
+        await trio.to_thread.run_sync(trio_thread_task, value_for_thread)
+
+    value_for_thread = random.randint(1, 10)
+    cv_6.set(value_for_thread)
+    async def main():
+        async with trio.open_nursery() as nursery:
+            nursery.start_soon(wait_for_a_thread)
+            nursery.start_soon(wait_for_a_thread)
+    trio.run(main)
+
+Thread(target=thread_task).start()
+Thread(target=thread_task).start()
