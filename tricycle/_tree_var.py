@@ -134,7 +134,7 @@ class TreeVar(Generic[T]):
 
     def _fetch(
         self,
-        for_task: Optional[TaskLike],
+        for_task: TaskLike,
         current_task: Optional[TaskLike],
     ) -> _TreeVarState[T]:
         """Return the _TreeVarState associated with *for_task*, inheriting
@@ -207,6 +207,7 @@ class TreeVar(Generic[T]):
         non_trio_thread_message = (
             "this thread wasn't created by Trio, pass kwarg trio_token=..."
         )
+        sync_context_task: SyncContextTask
         try:
             # Try calling from_thread
             trio.from_thread.run_sync(lambda: None)
@@ -236,7 +237,7 @@ class TreeVar(Generic[T]):
                 sync_context_task = data_per_thread.sync_context_task
         return sync_context_task
 
-    def get_current_task(self) -> TaskLike | None:
+    def get_current_task(self) -> TaskLike:
         sync_context_error_message = "must be called from async context"
         try:
             trio.current_time()
@@ -254,17 +255,21 @@ class TreeVar(Generic[T]):
                 # This state is observable primarily in instruments,
                 # end-of-run async generator finalizers, and some abort_fn callbacks.
                 if str(e) == sync_context_error_message:
-                    return trio.lowlevel.current_root_task()
+                    root_task = trio.lowlevel.current_root_task()
+                    assert root_task
+                    return root_task
                 raise e
             else:
                 # If both works, we're in a normal async context
                 return current_task
 
     @overload
-    def get(self) -> T: ...
+    def get(self) -> T:
+        ...
 
     @overload
-    def get(self, default: U) -> Union[T, U]: ...
+    def get(self, default: U) -> Union[T, U]:
+        ...
 
     def get(self, default: U = MISSING) -> Union[T, U]:
         this_task = self.get_current_task()
@@ -305,12 +310,14 @@ class TreeVar(Generic[T]):
             self.reset(token)
 
     @overload
-    def get_in(self, task_or_nursery: Union[TaskLike, trio.Nursery]) -> T: ...
+    def get_in(self, task_or_nursery: Union[TaskLike, trio.Nursery]) -> T:
+        ...
 
     @overload
     def get_in(
         self, task_or_nursery: Union[TaskLike, trio.Nursery], default: U
-    ) -> Union[T, U]: ...
+    ) -> Union[T, U]:
+        ...
 
     def get_in(
         self,

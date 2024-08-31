@@ -160,14 +160,14 @@ def test_treevar_sync_context() -> None:
         assert tv2.get() == 30
     assert tv2.get() == 10
 
-    def mix_async_and_sync():
+    def mix_async_and_sync() -> None:
         token_sync = tv2.set(15)
         assert tv2.get() == 15
 
-        trio_task = None
-        token_async = None
+        trio_task: trio.lowlevel.Task = None  # type: ignore[assignment]
+        token_async: TreeVarToken[int] = None  # type: ignore[assignment]
 
-        async def set_and_get():
+        async def set_and_get() -> None:
             nonlocal trio_task
             nonlocal token_async
             # Assert that the new trio run picks up the
@@ -235,8 +235,8 @@ def test_treevar_on_kernel_threads() -> None:
         assert tv1.get() == val1_v2
         assert tv2.get() == val2_v2
 
-    tv1 = TreeVar("tv1")
-    tv2 = TreeVar("tv2")
+    tv1 = TreeVar[int]("tv1")
+    tv2 = TreeVar[int]("tv2")
     tv1.set(val1_v1)
     tv2.set(val2_v1)
     Thread(target=thread_task).start()
@@ -293,8 +293,8 @@ def test_treevar_on_trio_threads() -> None:
             nursery.start_soon(nursery_task)
             nursery.start_soon(nursery_task)
 
-    tv1 = TreeVar("tv1")
-    tv2 = TreeVar("tv2")
+    tv1 = TreeVar[int]("tv1")
+    tv2 = TreeVar[int]("tv2")
     tv1.set(val1_v1)
     tv2.set(val2_v1)
     trio.run(main)
@@ -342,8 +342,8 @@ def test_treevar_on_kernel_threads_with_trio_threads() -> None:
         tv2.set(val2_v2)
         trio.run(main)
 
-    tv1 = TreeVar("tv1")
-    tv2 = TreeVar("tv2")
+    tv1 = TreeVar[int]("tv1")
+    tv2 = TreeVar[int]("tv2")
     tv1.set(val1_v1)
     tv2.set(val2_v1)
     Thread(target=thread_task).start()
@@ -374,8 +374,8 @@ def test_treevar_on_kernel_threads_with_kernel_threads() -> None:
         Thread(target=inner_thread_task).start()
         Thread(target=inner_thread_task).start()
 
-    tv1 = TreeVar("tv1")
-    tv2 = TreeVar("tv2")
+    tv1 = TreeVar[int]("tv1")
+    tv2 = TreeVar[int]("tv2")
     Thread(target=thread_task).start()
     Thread(target=thread_task).start()
 
@@ -427,8 +427,8 @@ def test_treevar_on_kernel_threads_with_trio_threads_with_kernel_threads() -> No
         tv2.set(val2_v1)
         trio.run(main)
 
-    tv1 = TreeVar("tv1")
-    tv2 = TreeVar("tv2")
+    tv1 = TreeVar[int]("tv1")
+    tv2 = TreeVar[int]("tv2")
     Thread(target=thread_task).start()
     Thread(target=thread_task).start()
 
@@ -454,8 +454,8 @@ def test_treevar_set_in_finalizer_does_not_affect_other_tasks() -> None:
     val2_v1 = random.randint(1, 10)
     val2_v2 = random.randint(1, 10)
 
-    tv1 = TreeVar("tv1")
-    tv2 = TreeVar("tv2")
+    tv1 = TreeVar[int]("tv1")
+    tv2 = TreeVar[int]("tv2")
 
     finalizer_has_set_value = trio.Event()
 
@@ -468,7 +468,7 @@ def test_treevar_set_in_finalizer_does_not_affect_other_tasks() -> None:
         assert tv2.get() == val2_v2
 
     async def set_at_finalizer() -> None:
-        async def agen() -> AsyncGenerator[int]:
+        async def agen() -> AsyncGenerator[int, None]:
             yield 42
 
         await step_outside_async_context(agen())
