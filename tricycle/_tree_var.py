@@ -22,6 +22,11 @@ U = TypeVar("U")
 
 
 class SyncContextTask:
+    """
+    We treat sync context in a thread as a single trio-task-like task.
+    Every thread will have at most 1 `SyncContextTask` object.
+    """
+
     def __init__(self, is_trio_thread: bool) -> None:
         self.is_trio_thread = is_trio_thread
         # Dummy properties expected for a dummy task
@@ -162,12 +167,12 @@ class TreeVar(Generic[T]):
                 # root trio task doesn't have a parent nursery
                 # root "init" task doesn't have a parent nursery
                 try:
-                    # Try to get  the latest state from the sync context
+                    # Try to get the latest state from the sync context
                     sync_context_state = self.get_current_sync_context_task().context[
                         self._cvar
                     ]
-                    # There's no notion of 'value_for_children' in sync context,
-                    # whatever value is set for the sync task is the value
+                    # There's no notion of 'value_for_children' in sync context.
+                    # Whatever value is set for the sync task is the value
                     # that needs to be inherited to the async context.
                     inherited_value = sync_context_state.value_for_task
                 except (KeyError, LookupError):
@@ -196,17 +201,24 @@ class TreeVar(Generic[T]):
         return new_state
 
     def get_current_sync_context_task(self) -> SyncContextTask:
+        """
+        Get the 'task' for the current sync context.
+        """
         non_trio_thread_message = (
             "this thread wasn't created by Trio, pass kwarg trio_token=..."
         )
         try:
+            # Try calling from_thread
             trio.from_thread.run_sync(lambda: None)
         except RuntimeError as exc:
             if str(exc) == non_trio_thread_message:
-                # We're in a non-trio thread
+                # If it fails, we're in a non-trio thread
                 try:
+                    # Try to get the previously-set sync context task for this thread
                     sync_context_task = data_per_thread.sync_context_task
                 except AttributeError:
+                    # If we get an AttributeError, this is the first time
+                    # sync context task is retrieved for this thread
                     data_per_thread.sync_context_task = SyncContextTask(
                         is_trio_thread=False
                     )
@@ -215,8 +227,11 @@ class TreeVar(Generic[T]):
                 raise exc
         else:
             try:
+                # Try to get the previously-set sync context task for this thread
                 sync_context_task = data_per_thread.sync_context_task
             except AttributeError:
+                # If we get an AttributeError, this is the first time
+                # sync context task is retrieved for this thread
                 data_per_thread.sync_context_task = SyncContextTask(is_trio_thread=True)
                 sync_context_task = data_per_thread.sync_context_task
         return sync_context_task
