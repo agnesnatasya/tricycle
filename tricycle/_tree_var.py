@@ -20,18 +20,21 @@ from typing import (
 T = TypeVar("T")
 U = TypeVar("U")
 
-class SyncContextTask():
+
+class SyncContextTask:
     def __init__(self, is_trio_thread: bool) -> None:
         self.is_trio_thread = is_trio_thread
         # Dummy properties expected for a dummy task
-        self.parent_nursery=None
+        self.parent_nursery = None
         self.eventual_parent_nursery = None
-        self.child_nurseries: list[trio.Nursery]= []
-        self.context= contextvars.copy_context()
-    
+        self.child_nurseries: list[trio.Nursery] = []
+        self.context = contextvars.copy_context()
+
     @property
     def name(self) -> str:
         return self.__repr__()
+
+
 TaskLike = Union[SyncContextTask, trio.lowlevel.Task]
 
 # Use threading.local instead of contextvars because
@@ -80,6 +83,7 @@ class TreeVarToken(Generic[T]):
     var: TreeVar[T]
     old_value: T
     _context: contextvars.Context = attrs.field(repr=False)
+
 
 class TreeVar(Generic[T]):
     """A "tree variable": like a context variable except that its value
@@ -159,10 +163,12 @@ class TreeVar(Generic[T]):
                 # root "init" task doesn't have a parent nursery
                 try:
                     # Try to get  the latest state from the sync context
-                    sync_context_state = data_per_thread.sync_context_task.context[self._cvar]
+                    sync_context_state = self.get_current_sync_context_task().context[
+                        self._cvar
+                    ]
                     # There's no notion of 'value_for_children' in sync context,
                     # whatever value is set for the sync task is the value
-                    # that needs to be inherited to the async context. 
+                    # that needs to be inherited to the async context.
                     inherited_value = sync_context_state.value_for_task
                 except (KeyError, LookupError):
                     # This TreeVar hasn't yet been used in the sync context.
@@ -181,7 +187,7 @@ class TreeVar(Generic[T]):
             # context.run() might fail.
             pass
         elif isinstance(for_task, SyncContextTask):
-            for_task.context.run(self._cvar.set, new_state) # NOCOMMIT: double check what oremanj said about cvar.set()
+            for_task.context.run(self._cvar.set, new_state)
         else:
             if for_task.context is current_task.context:
                 self._cvar.set(new_state)
@@ -190,7 +196,9 @@ class TreeVar(Generic[T]):
         return new_state
 
     def get_current_sync_context_task(self) -> SyncContextTask:
-        non_trio_thread_message = "this thread wasn't created by Trio, pass kwarg trio_token=..."
+        non_trio_thread_message = (
+            "this thread wasn't created by Trio, pass kwarg trio_token=..."
+        )
         try:
             trio.from_thread.run_sync(lambda: None)
         except RuntimeError as exc:
@@ -199,7 +207,9 @@ class TreeVar(Generic[T]):
                 try:
                     sync_context_task = data_per_thread.sync_context_task
                 except AttributeError:
-                    data_per_thread.sync_context_task = SyncContextTask(is_trio_thread=False)
+                    data_per_thread.sync_context_task = SyncContextTask(
+                        is_trio_thread=False
+                    )
                     sync_context_task = data_per_thread.sync_context_task
             else:
                 raise exc
@@ -207,8 +217,8 @@ class TreeVar(Generic[T]):
             try:
                 sync_context_task = data_per_thread.sync_context_task
             except AttributeError:
-                    data_per_thread.sync_context_task = SyncContextTask(is_trio_thread=True)
-                    sync_context_task = data_per_thread.sync_context_task        
+                data_per_thread.sync_context_task = SyncContextTask(is_trio_thread=True)
+                sync_context_task = data_per_thread.sync_context_task
         return sync_context_task
 
     def get_current_task(self) -> TaskLike | None:
@@ -224,9 +234,9 @@ class TreeVar(Generic[T]):
             try:
                 current_task = trio.lowlevel.current_task()
             except RuntimeError as e:
-                # If trio.current_time works but current_task fails, 
+                # If trio.current_time works but current_task fails,
                 # there is an active run but no active task.
-                # This state is observable primarily in instruments, 
+                # This state is observable primarily in instruments,
                 # end-of-run async generator finalizers, and some abort_fn callbacks.
                 if str(e) == sync_context_error_message:
                     return trio.lowlevel.current_root_task()
