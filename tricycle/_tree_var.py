@@ -22,8 +22,7 @@ U = TypeVar("U")
 
 
 class SyncContextTask:
-    """
-    We treat sync context in a thread as a single trio-task-like task.
+    """We treat sync context in a thread as a single trio-task-like task.
     Every thread will have at most 1 `SyncContextTask` object.
     """
 
@@ -201,9 +200,7 @@ class TreeVar(Generic[T]):
         return new_state
 
     def get_current_sync_context_task(self) -> SyncContextTask:
-        """
-        Get the 'task' for the current sync context.
-        """
+        """Get the 'task' for the current sync context."""
         non_trio_thread_message = (
             "this thread wasn't created by Trio, pass kwarg trio_token=..."
         )
@@ -325,7 +322,7 @@ class TreeVar(Generic[T]):
         default: U = MISSING,
     ) -> Union[T, U]:
         """Gets the value of this `TreeVar` in the given
-        `~TaskLike` or `~trio.Nursery`.
+        `TaskLike` or `~trio.Nursery`.
 
         The value in a task is the value that would be returned by a
         call to :meth:`~contextvars.ContextVar.get` in that task. The
