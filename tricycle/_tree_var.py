@@ -39,13 +39,13 @@ class SyncContextTask:
         return self.__repr__()
 
 
-TaskLike = Union[SyncContextTask, trio.lowlevel.Task]
+TaskLike = Union[trio.lowlevel.Task, SyncContextTask]
 
 # Use threading.local instead of contextvars because
 # contextvars behave differently for trio-created threads and kernel threads
 data_per_thread = threading.local()
 
-__all__ = ["TreeVar", "TreeVarToken"]
+__all__ = ["TreeVar", "TreeVarToken", "SyncContextTask"]
 
 
 MISSING: Any = contextvars.Token.MISSING
@@ -307,22 +307,22 @@ class TreeVar(Generic[T]):
             self.reset(token)
 
     @overload
-    def get_in(self, task_or_nursery: Union[TaskLike, trio.Nursery]) -> T:
+    def get_in(self, task_or_nursery: Union[trio.lowlevel.Task, trio.Nursery]) -> T:
         ...
 
     @overload
     def get_in(
-        self, task_or_nursery: Union[TaskLike, trio.Nursery], default: U
+        self, task_or_nursery: Union[trio.lowlevel.Task, trio.Nursery], default: U
     ) -> Union[T, U]:
         ...
 
     def get_in(
         self,
-        task_or_nursery: Union[TaskLike, trio.Nursery],
+        task_or_nursery: Union[trio.lowlevel.Task, trio.Nursery],
         default: U = MISSING,
     ) -> Union[T, U]:
         """Gets the value of this `TreeVar` in the given
-        `TaskLike` or `~trio.Nursery`.
+        `trio.lowlevel.Task` or `~trio.Nursery`.
 
         The value in a task is the value that would be returned by a
         call to :meth:`~contextvars.ContextVar.get` in that task. The
